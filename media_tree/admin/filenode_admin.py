@@ -1,16 +1,13 @@
-# TODO: If in subfolder view, reset_expanded_folders_pk is called and expanded_folders are not stored 
+# TODO: If a file does not exist, generating a thumbnail causes an IOError, which should be caught if not MEDIA_TREE_MEDIA_BACKEND_DEBUG
 # TODO: Metadata tooltip is too narrow and text gets too wrapped
-# TODO: Make renaming of files possible.
-# TODO: When files are copied, they lose their human-readable name. Should actually create "File Copy 2.txt".
-# TODO: Bug: With child folder changelist view and child of child expanded -- after uploading a file, the child 
-#       of child has the expanded triangle, 
-#       but no child child child objects are visible.
-#
-# Low priority:
-#
+# TODO: Add icon for change and add folder
 # TODO: Ordering of tree by column (within parent) should be possible
 # TODO: Refactor SWFUpload stuff as extension. This would require signals calls
-#       to be called in the FileNodeAdmin view methods.
+#   to be called in the FileNodeAdmin view methods.
+# TODO: Make renaming of files possible.
+# TODO: When files are copied, they lose their human-readable name. Should actually create "File Copy 2.txt".
+# TODO: Bug: With child folder changelist view and child of child expanded -- after uploading a file, the child of child has the expanded triangle, 
+#   but no child child child objects are visible.
 
 
 from media_tree.fields import FileNodeChoiceField
@@ -60,6 +57,13 @@ from django.contrib.admin.views.main import IS_POPUP_VAR
 from django.utils.text import capfirst
 import os
 
+try:
+    # Django 1.2
+    from django.views.decorators.csrf import csrf_view_exempt
+except ImportError:
+    # pre 1.2
+    from django.contrib.csrf.middleware import csrf_view_exempt
+
 
 STATIC_SUBDIR = app_settings.MEDIA_TREE_STATIC_SUBDIR
 
@@ -78,20 +82,6 @@ class FileNodeAdmin(MPTTModelAdmin):
     You can also extend the admin interface in many different fashions to suit
     your custom requirements. Please refer to :ref:`extending` for more
     information about extending Media Tree.
-
-    Special features:
-    =================
-
-    * The AJAX-enhanced interface allows you to browse your folder tree without
-      page reloads.
-    * The file listing supports drag & drop. Drag files and folders to another
-      folder to move them. Hold the Alt key to copy them.
-    * You can set up an upload queue, which enables you to upload large files 
-      and monitor the process via the corresponding progress bars. 
-    * Drag the slider above the file listing to dynamically resize thumbnails.
-    * You can select files and execute various special actions on them, for 
-      instance download the selection as a ZIP archive. 
-
     """
 
     change_list_template = 'admin/media_tree/filenode/mptt_change_list.html'
@@ -113,17 +103,19 @@ class FileNodeAdmin(MPTTModelAdmin):
 
     class Media:
         js = [
-            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery-1.7.1.min.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.ui.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.cookie.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'lib', 'fileuploader.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'js', 'admin_enhancements.js').replace("\\","/"),
-            os.path.join(STATIC_SUBDIR, 'js', 'django_admin_fileuploader.js').replace("\\","/"),
+            os.path.join(STATIC_SUBDIR, 'lib/swfupload/swfupload_fp10', 'swfupload.js'),
+            os.path.join(STATIC_SUBDIR, 'lib/swfupload/plugins', 'swfupload.queue.js'),
+            os.path.join(STATIC_SUBDIR, 'lib/swfupload/plugins', 'swfupload.cookies.js'),
+            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.js'),
+            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.ui.js'),
+            os.path.join(STATIC_SUBDIR, 'lib/jquery', 'jquery.cookie.js'),
+            os.path.join(STATIC_SUBDIR, 'js', 'admin_enhancements.js'),
+            os.path.join(STATIC_SUBDIR, 'js', 'jquery.swfupload_manager.js'),
         ]
         css = {
             'all': (
-                os.path.join(STATIC_SUBDIR, 'css', 'swfupload.css').replace("\\","/"),
-                os.path.join(STATIC_SUBDIR, 'css', 'ui.css').replace("\\","/"),
+                os.path.join(STATIC_SUBDIR, 'css', 'swfupload.css'),
+                os.path.join(STATIC_SUBDIR, 'css', 'ui.css'),
             )
         }
 
@@ -217,7 +209,6 @@ class FileNodeAdmin(MPTTModelAdmin):
         if not change:
             if not obj.node_type:
                 obj.node_type = get_request_attr(request, 'save_node_type', None)
-        obj.attach_user(request.user, change)
         super(FileNodeAdmin, self).save_model(request, obj, form, change)
 
     def metadata_check(self, node):
@@ -234,33 +225,28 @@ class FileNodeAdmin(MPTTModelAdmin):
         else:
             rel = ''
         if hasattr(node, 'reduce_levels'):
-            qs_params = {'reduce_levels': node.reduce_levels}
+            reduce_param = '&reduce_levels=%i' % node.reduce_levels
         else:
-            qs_params = None
+            reduce_param = ''
         if node.is_folder():
             empty = ' empty' if node.get_children().count() == 0 else ''
-            return '<a href="%s" class="folder-toggle%s" rel="%s"><span>%s</span></a>' %  \
-                (node.get_admin_url(qs_params), empty, rel, '+')
+            return '<a href="%s%s" class="folder-toggle%s" rel="%s"><span>%s</span></a>' %  \
+                (node.get_admin_url(), reduce_param, empty, rel, '+')
         else:
             return '<a class="folder-toggle dummy" rel="%s">&nbsp;</a>' % (rel,)
     expand_collapse.short_description = ''
     expand_collapse.allow_tags = True
 
     def admin_preview(self, node, icons_only=False):
-        request = get_current_request()
         template = 'admin/media_tree/filenode/includes/preview.html'
         if not get_media_backend():
             icons_only = True
             template = 'media_tree/filenode/includes/icon.html'
             # TODO SPLIT preview.html in two: one that doesn't need media backend!
-        
-        thumb_size_key = get_request_attr(request, 'thumbnail_size') or 'default'
-
         preview = render_to_string(template, {
             'node': node,
             'preview_file': node.get_icon_file() if icons_only else node.get_preview_file(),
-            'class': 'collapsed' if node.is_folder() else '',
-            'thumbnail_size': app_settings.MEDIA_TREE_ADMIN_THUMBNAIL_SIZES[thumb_size_key]
+            'class': 'collapsed' if node.is_folder() else ''
         })
         if node.is_folder():
             preview += render_to_string(template, {
@@ -273,12 +259,15 @@ class FileNodeAdmin(MPTTModelAdmin):
     admin_preview.allow_tags = True
 
     def admin_link(self, node, include_preview=False):
-        return '<a class="node-link" href="%s">%s<span class="name">%s</span></a>' % (
+        return '<a href="%s">%s<span class="name">%s</span></a>' % (
             node.get_admin_url(), self.admin_preview(node) if include_preview else '', node.name)
 
     def node_tools(self, node):
         tools = ''
-        tools += '<li><a class="changelink" href="%s">%s</a></li>' % (reverse('admin:media_tree_filenode_change', args=(node.pk,)), capfirst(ugettext('change')))
+        tools += '<li><a class="change" href="%s">%s</a></li>' % (reverse('admin:media_tree_filenode_change', args=(node.pk,)), ugettext('change'))
+        #if node.is_folder():
+        #    tools += '<li><a class="add-folder" href="%s?folder_id=%s">%s</a></li>' % (
+        #        reverse('admin:media_tree_filenode_add_folder', args=()), str(node.pk), ugettext('add folder'))
         return '<ul class="node-tools">%s</ul>' % tools
     node_tools.short_description = ''
     node_tools.allow_tags = True
@@ -291,7 +280,7 @@ class FileNodeAdmin(MPTTModelAdmin):
         if node.is_folder():
             request = get_current_request()
             state = 'expanded' if self.folder_is_open(request, node) else 'collapsed'
-        return '<span id="%s" class="node browse-controls %s %s">%s%s</span>' %  \
+        return '<span id="%s" class="browse-controls %s %s">%s%s</span>' %  \
             (self.anchor_name(node), 'folder' if node.is_folder() else 'file',
             state, self.expand_collapse(node), self.admin_link(node, True))
     browse_controls.short_description = ''
@@ -318,8 +307,7 @@ class FileNodeAdmin(MPTTModelAdmin):
     size_formatted.allow_tags = True
 
     def init_parent_folder(self, request):
-        folder_id = request.GET.get('folder_id', None) or  \
-            request.GET.get('parent') or request.POST.get('parent', None)
+        folder_id = request.GET.get('folder_id', None) or request.POST.get('parent', None)
         reduce_levels = request.GET.get('reduce_levels', None) or request.POST.get('reduce_levels', None)
         if folder_id or reduce_levels:
             request.GET = request.GET.copy()
@@ -382,22 +370,6 @@ class FileNodeAdmin(MPTTModelAdmin):
     def set_expanded_folders_pk(self, response, expanded_folders_pk):
         response.set_cookie('expanded_folders_pk', '|'.join([str(pk) for pk in expanded_folders_pk]), path='/')
 
-    def init_changelist_view_options(self, request):
-        if 'thumbnail_size' in request.GET:
-            request.GET = request.GET.copy()
-            thumb_size_key = request.GET.get('thumbnail_size')
-            del request.GET['thumbnail_size']
-            if not thumb_size_key in app_settings.MEDIA_TREE_ADMIN_THUMBNAIL_SIZES:
-                 thumb_size_key = None
-            request.session['thumbnail_size'] = thumb_size_key
-        thumb_size_key = request.session.get('thumbnail_size', 'default')
-        set_request_attr(request, 'thumbnail_size', thumb_size_key)
-        return {
-            'thumbnail_sizes': app_settings.MEDIA_TREE_ADMIN_THUMBNAIL_SIZES,
-            'thumbnail_size_key': thumb_size_key
-        }
-
-
     def changelist_view(self, request, extra_context=None):
         response = execute_empty_queryset_action(self, request)
         if response:
@@ -412,20 +384,21 @@ class FileNodeAdmin(MPTTModelAdmin):
 
         if not extra_context:
             extra_context = {}
-
-        extra_context.update(self.init_changelist_view_options(request))
-
         if app_settings.MEDIA_TREE_SWFUPLOAD:
-            swfupload_upload_url = reverse('admin:media_tree_filenode_upload')
-            #swfupload_flash_url = os.path.join(settings.MEDIA_URL, STATIC_SUBDIR, 'lib/swfupload/swfupload_fp10/swfupload.swf')
-            swfupload_flash_url = reverse('admin:media_tree_filenode_static_swfupload_swf')
-            extra_context.update({
-                'file_types': app_settings.MEDIA_TREE_ALLOWED_FILE_TYPES,
-                'file_size_limit': app_settings.MEDIA_TREE_FILE_SIZE_LIMIT,
-                'swfupload_flash_url': swfupload_flash_url,
-                'swfupload_upload_url': swfupload_upload_url,
-            })
-
+            middleware = 'media_tree.middleware.SessionPostMiddleware'
+            if not middleware in settings.MIDDLEWARE_CLASSES:
+		pass
+                #request.user.message_set.create(message=_('You need to put %s in your MIDDLEWARE_CLASSES setting to use SWFUpload.') % middleware)
+            else:
+                swfupload_upload_url = reverse('admin:media_tree_filenode_upload')
+                #swfupload_flash_url = os.path.join(settings.MEDIA_URL, STATIC_SUBDIR, 'lib/swfupload/swfupload_fp10/swfupload.swf')
+                swfupload_flash_url = reverse('admin:media_tree_filenode_static_swfupload_swf')
+                extra_context.update({
+                    'file_types': app_settings.MEDIA_TREE_ALLOWED_FILE_TYPES,
+                    'file_size_limit': app_settings.MEDIA_TREE_FILE_SIZE_LIMIT,
+                    'swfupload_flash_url': swfupload_flash_url,
+                    'swfupload_upload_url': swfupload_upload_url,
+                })
         if request.GET.get(IS_POPUP_VAR, None):
             extra_context.update({'select_button': True})
 
@@ -477,11 +450,7 @@ class FileNodeAdmin(MPTTModelAdmin):
             node_type=FileNode.FOLDER)
 
     def change_view(self, request, object_id, extra_context=None):
-        try:
-            object_id = str(object_id)
-            node = get_object_or_404(FileNode, pk=unquote(object_id))
-        except ValueError:
-            raise Http404
+        node = get_object_or_404(FileNode, pk=unquote(object_id))
         set_request_attr(request, 'save_node', node)
         set_request_attr(request, 'save_node_type', node.node_type)
         if not extra_context:
@@ -491,7 +460,7 @@ class FileNodeAdmin(MPTTModelAdmin):
         })
         if node.is_folder():
             extra_context.update({
-                'breadcrumbs_title': capfirst(_('change'))
+                'breadcrumbs_title': _('Change')
             })
 
         return super(FileNodeAdmin, self).change_view(request, object_id, extra_context=extra_context)
@@ -510,76 +479,41 @@ class FileNodeAdmin(MPTTModelAdmin):
     # Upload view is exempted from CSRF protection since SWFUpload cannot send cookies (i.e. it can only
     # send cookie values as POST values, but that would render this check useless anyway).
     # However, Flash Player should already be enforcing a same-domain policy.
-    @csrf_protect_m
-    @transaction.commit_on_success
+    @csrf_view_exempt
     def upload_file_view(self, request):
-        try:
-            if not self.has_add_permission(request):
-                raise PermissionDenied
-
-            FILE_PARAM_NAME = 'qqfile'
-            self.init_parent_folder(request)
-
-            if request.method == 'POST':
-
-                if request.is_ajax() and request.GET.get(FILE_PARAM_NAME, None):
-                    from django.core.files.base import ContentFile
-                    from django.core.files.uploadedfile import UploadedFile
-                    content_file = ContentFile(request.raw_post_data)
-                    uploaded_file = UploadedFile(content_file, request.GET.get(FILE_PARAM_NAME), None, content_file.size)
-                    form = UploadForm(request.POST, {'file': uploaded_file})
+        self.init_parent_folder(request)
+        if not self.has_add_permission(request):
+            raise PermissionDenied
+        if request.method == 'POST':
+            form = UploadForm(request.POST, request.FILES)
+            if form.is_valid():
+                node = FileNode(file=form.cleaned_data['file'], node_type=FileNode.FILE)
+                parent_folder = self.get_parent_folder(request)
+                if not parent_folder.is_top_node():
+                    node.parent = parent_folder
+                self.save_model(request, node, None, False)
+                # Respond with 'ok' for the client to verify that the upload was successful, since sometimes a failed
+                # request would not result in a HTTP error and look like a successful upload.
+                # For instance: When requesting the admin view without authentication, there is a redirect to the
+                # login form, which to SWFUpload looks like a successful upload request.
+                if request.is_ajax() or 'Adobe Flash' in request.META.get('HTTP_USER_AGENT', ''):
+                    return HttpResponse("ok", mimetype="text/plain")
                 else:
-                    form = UploadForm(request.POST, request.FILES)
-
-                if form.is_valid():
-                    node = FileNode(file=form.cleaned_data['file'], node_type=FileNode.FILE)
-                    parent_folder = self.get_parent_folder(request)
-                    if not parent_folder.is_top_node():
-                        node.parent = parent_folder
-                    self.save_model(request, node, None, False)
-                    # Respond with 'ok' for the client to verify that the upload was successful, since sometimes a failed
-                    # request would not result in a HTTP error and look like a successful upload.
-                    # For instance: When requesting the admin view without authentication, there is a redirect to the
-                    # login form, which to SWFUpload looks like a successful upload request.
-                    if request.is_ajax():
-                        return HttpResponse('{"success": true}', mimetype="application/json")
-                    else:
-                        messages.info(request, _('Successfully uploaded file %s.') % node.name)
-                        return HttpResponseRedirect(reverse('admin:media_tree_filenode_changelist'))
-                else:
-                    # invalid form data
-                    if request.is_ajax():
-                        return HttpResponse('{"error": "%s"}' % ' '.join(
-                            [item for sublist in form.errors.values() for item in sublist]), 
-                            mimetype="application/json")
-
-            # Form is rendered for troubleshooting SWFUpload. If this form works, the problem is not server-side.
-            if not settings.DEBUG:
-                raise ViewDoesNotExist
-            if request.method == 'GET':
-                form = UploadForm()
-            return render_to_response('admin/media_tree/filenode/upload_form.html', {'form': form})            
-
-        except Exception as e:
-            if request.is_ajax():
-                return HttpResponse('{"error": "%s"}' % ugettext('Server Error'), 
-                    mimetype="application/json")
+                    messages.info(request, _('Successfully uploaded file %s.') % node.name)
+                    return HttpResponseRedirect(reverse('admin:media_tree_filenode_changelist'))
             else:
-                raise
-
-    def open_path_view(self, request, path=''):
-        if path is None or path == '':
-            return self.changelist_view(request)
-        try:
-            obj = FileNode.objects.get(path=path)
-        except FileNode.DoesNotExist:
-            raise Http404
-        if obj.is_folder():
-            request.GET = request.GET.copy()
-            request.GET['folder_id'] = str(obj.pk)
-            return self.changelist_view(request)
+                if not settings.DEBUG:
+                    raise ValidationError
+                    return
+        if not settings.DEBUG:
+            raise ViewDoesNotExist
         else:
-            return self.change_view(request, obj.pk)
+            # Form is rendered for troubleshooting SWFUpload. If this form works, the problem is not server-side.
+            from django.template import Template, RequestContext
+            if request.method != 'POST':
+                form = UploadForm()
+            return render_to_response('admin/media_tree/filenode/upload_form.html',
+                {'form': form, 'node': self.get_parent_folder(request)}, context_instance=RequestContext(request))
 
     def i18n_javascript(self, request):
         """
@@ -616,12 +550,6 @@ class FileNodeAdmin(MPTTModelAdmin):
             url(r'^add_folder/$',
                 self.admin_site.admin_view(self.add_folder_view),
                 name='%s_%s_add_folder' % info),
-            url(r'^!/(?P<path>.*)/$',
-                self.admin_site.admin_view(self.open_path_view),
-                name='%s_%s_open_path' % info),
-            url(r'^!/$',
-                self.admin_site.admin_view(self.open_path_view),
-                name='%s_%s_open_root' % info),
             url(r'^(.+)/expand/$',
                 self.admin_site.admin_view(self.folder_expand_view),
                 name='%s_%s_folder_expand' % info),
@@ -633,8 +561,6 @@ class FileNodeAdmin(MPTTModelAdmin):
 FileNodeAdmin.register_action(core_actions.copy_selected)
 FileNodeAdmin.register_action(core_actions.move_selected)
 FileNodeAdmin.register_action(core_actions.change_metadata_for_selected)
-FileNodeAdmin.register_action(core_actions.expand_selected)
-FileNodeAdmin.register_action(core_actions.collapse_selected)
 
 FileNodeAdmin.register_action(maintenance_actions.delete_orphaned_files, ('media_tree.manage_filenode',))
 if settings.DEBUG:

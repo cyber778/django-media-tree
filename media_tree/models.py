@@ -48,71 +48,6 @@ def Property(func):
     return property(**func())
 
 
-class FileNodeManager(models.Manager):
-    """ 
-    A special manager that enables you to pass a ``path`` argument to 
-    :func:`get`, :func:`filter`, and :func:`exclude`, allowing you to 
-    retrieve ``FileNode`` objects by their full node path, 
-    which consists of the names of its parents and itself,
-    e.g. ``"path/to/folder/readme.txt"``.
-    """
-
-    def __init__(self, filter_args={}):
-        super(FileNodeManager, self).__init__()
-        self.filter_args = filter_args
-
-    def get_query_set(self):
-        return super(FileNodeManager, self).get_query_set().filter(**self.filter_args)
-
-    def get_filter_args_with_path(self, for_self, **kwargs):
-        names = kwargs['path'].strip('/').split('/')
-        names.reverse()
-        parent_arg = '%s'
-        new_kwargs = {}
-        for index, name in enumerate(names):
-            if not for_self or index > 0:
-                parent_arg = 'parent__%s' % parent_arg
-            new_kwargs[parent_arg % 'name'] = name
-        new_kwargs[parent_arg % 'level'] = 0
-        new_kwargs.update(kwargs)
-        new_kwargs.pop('path')
-        return new_kwargs
-
-    def filter(self, *args, **kwargs):
-        """
-        Works just like the default Manager's :func:`filter` method, but
-        you can pass an additional keyword argument named ``path`` specifying
-        the full **path of the folder whose immediate child objects** you 
-        want to retrieve, e.g. ``"path/to/folder"``. 
-        """
-        if 'path' in kwargs:
-            kwargs = self.get_filter_args_with_path(False, **kwargs)
-        return super(FileNodeManager, self).filter(*args, **kwargs)
-
-    def exclude(self, *args, **kwargs):
-        """
-        Works just like the default Manager's :func:`exclude` method, but
-        you can pass an additional keyword argument named ``path`` specifying
-        the full **path of the folder whose immediate child objects** you 
-        want to exclude, e.g. ``"path/to/folder"``. 
-        """
-        if 'path' in kwargs:
-            kwargs = self.get_filter_args_with_path(False, **kwargs)
-        return super(FileNodeManager, self).exclude(*args, **kwargs)
-
-    def get(self, *args, **kwargs):
-        """
-        Works just like the default Manager's :func:`get` method, but
-        you can pass an additional keyword argument named ``path`` specifying
-        the full path of the object you want to retrieve, e.g.
-        ``"path/to/folder/readme.txt"``. 
-        """
-        if 'path' in kwargs:
-            kwargs = self.get_filter_args_with_path(True, **kwargs)
-        return super(FileNodeManager, self).get(
-            *args, **kwargs)
-
-
 class FileNode(ModelBase):
     """
     Each ``FileNode`` instance represents a node in the media object tree, that
@@ -127,22 +62,14 @@ class FileNode(ModelBase):
        trees.
 
     You can access the actual media associated to a ``FileNode`` model instance 
-    using the following fields:
+    using the following to field attributes:
 
-    .. role:: descname(literal)
-       :class: descname 
-
-    :descname:`file`
+    ``file``
         The actual media file
 
-    :descname:`preview_file`
+    ``preview_file``
         An optional image file that will be used for previews. This is useful 
         for visual media that PIL cannot read, such as video files.
-
-    These fields are of the class ``FileField``. Please see :ref:`configuration`
-    for information on how to configure storage and media backend classes. By
-    default, media files are stored in a subfolder ``uploads`` under your media
-    root.
     """
 
     FOLDER = media_types.FOLDER
@@ -154,29 +81,6 @@ class FileNode(ModelBase):
     STORAGE = get_media_storage()
 
     tree = TreeManager()
-    """ MPTT tree manager """
-
-    objects = FileNodeManager()
-    """ 
-    An instance of the :class:`FileNodeManager` class, providing methods for retrieving ``FileNode`` objects by their full node path.
-    """
-
-    published_objects = FileNodeManager({'published': True})
-    """ 
-    A special manager with the same features as :attr:`objects`, but only displaying currently
-    published objects.
-    """
-
-    folders = FileNodeManager({'node_type': FOLDER})
-    """ 
-    A special manager with the same features as :attr:`objects`, but only displaying folder nodes.
-    """
-
-    files = FileNodeManager({'node_type': FILE})
-    """ 
-    A special manager with the same features as :attr:`objects`, but only displaying file nodes,
-    no folder nodes.
-    """
 
     # FileFields -- have no docstring since Sphinx cannot access these attributes
     file = models.FileField(_('file'), upload_to=app_settings.MEDIA_TREE_UPLOAD_SUBDIR, null=True, storage=STORAGE)
@@ -188,10 +92,10 @@ class FileNode(ModelBase):
     """ The parent (folder) object of the node. """
     
     node_type = models.IntegerField(_('node type'), choices = ((FOLDER, 'Folder'), (FILE, 'File')), editable=False, blank=False, null=False)
-    """ Type of the node (:attr:`FileNode.FILE` or :attr:`FileNode.FOLDER`) """
+    """ Type of the node (``FileNode.FILE`` or ``FileNode.FOLDER``) """
     media_type = models.IntegerField(_('media type'), choices = app_settings.MEDIA_TREE_CONTENT_TYPE_CHOICES, blank=True, null=True, editable=False)
     """ Media type, i.e. broad category of the kind of media """
-    published = models.BooleanField(_('is published'), blank=True, default=True)
+    published = models.BooleanField(_('is published'), blank=True, default=True, editable=False)
     """ Publish date and time """
     mimetype = models.CharField(_('mimetype'), max_length=64, null=True, editable=False)
     """ The mime type of the media file """
@@ -300,6 +204,8 @@ class FileNode(ModelBase):
 
         return locals()
 
+    # TODO this should be called from FileNode.save(), not from admin (since there is no request on CopyFileNodesForm.save())
+    # -- look into threadlocals
     def attach_user(self, user, change):
         if not change:
             self.created_by = user
@@ -416,34 +322,22 @@ class FileNode(ModelBase):
     has_metadata_including_descendants.short_description = _('Metadata')
     has_metadata_including_descendants.boolean = True
 
-    def get_path(self):
-        path = ''
-        for name in [node.name for node in self.get_ancestors()]:
-            path = '%s%s/' % (path, name) 
-        return '%s%s' % (path, self.name)
-
-    def get_admin_url(self, query_params=None, use_path=False):
+    def get_admin_url(self):
         """Returns the URL for viewing a FileNode in the admin."""
 
-        if not query_params:
-            query_params = {}
-
-        url = ''
         if self.is_top_node():
-            url = reverse('admin:media_tree_filenode_changelist');
-        elif use_path and (self.is_folder() or self.pk):
-            url = reverse('admin:media_tree_filenode_open_path', args=(self.get_path(),));
-        elif self.is_folder():
-            url = reverse('admin:media_tree_filenode_changelist');
-            query_params['folder_id'] = self.pk
-        elif self.pk:
+            return reverse('admin:media_tree_filenode_changelist');
+        if self.is_folder():
+            return "%s?folder_id=%i" % (reverse('admin:media_tree_filenode_changelist', args=()), self.pk);
+        if self.pk:
             return reverse('admin:media_tree_filenode_change', args=(self.pk,));
-
-        if len(query_params):
-            params = ['%s=%s' % (key, value) for key, value in query_params.items()]
-            url = '%s?%s' % (url, "&".join(params))
-
-        return url
+        return ''
+        # ID Path no longer necessary
+        #url = reverse('admin:media_tree_filenode_changelist');
+        #for node in self.get_node_path():
+        #    if node.level >= 0:
+        #        url += str(node.pk)+'/'
+        #return url
 
     def get_admin_link(self):
         return force_unicode(mark_safe(u'%s: <a href="%s">%s</a>' %
@@ -560,7 +454,7 @@ class FileNode(ModelBase):
         self.media_type = media_types.SUPPORTED_IMAGE
         self.width, self.height = self.saved_image.size
 
-    def file_path(self):
+    def path(self):
         return self.file.path if self.file else ''
 
     def is_folder(self):
@@ -644,9 +538,9 @@ class FileNode(ModelBase):
             <img src="{{ node.file.url }}" alt="{{ node.alt }}" />
 
         """
-        if self.override_alt != '' and self.override_alt is not None:
+        if self.override_alt != '':
             return self.override_alt
-        elif self.override_caption != '' and self.override_caption is not None:
+        elif self.override_caption != '':
             return self.override_caption
         else:
             return self.get_metadata_display()

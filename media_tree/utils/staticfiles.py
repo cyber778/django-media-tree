@@ -4,8 +4,6 @@ from django.conf import settings
 from django.db.models.fields.files import FieldFile
 from django.core.files.storage import FileSystemStorage
 from django.core.files.base import File
-from django.utils.translation import ugettext_lazy as _
-from PIL import Image
 import os
 
 
@@ -23,8 +21,6 @@ def get_static_storage():
 
 
 STATIC_STORAGE = get_static_storage()
-BUFFERED_ICON_SIZES = {}
-EXISTING_PATHS = {}
 
 
 class StaticFile(FieldFile):
@@ -49,7 +45,7 @@ class StaticFile(FieldFile):
         return self.instance.__unicode__()
 
     def alt(self):
-        return self.instance.alt
+        return self.instance.alt()
 
 
 class StaticIconFile(StaticFile):
@@ -61,20 +57,6 @@ class StaticIconFile(StaticFile):
     def __init__(self, *args, **kwargs):
         super(StaticIconFile, self).__init__(*args, **kwargs)
         self.is_icon = True
-        if not self.path in BUFFERED_ICON_SIZES:
-            try:
-                im = Image.open(self.path)
-                BUFFERED_ICON_SIZES[self.path] = im.size
-            except:
-                pass
-        self.width, self.height = BUFFERED_ICON_SIZES.get(self.path, (None, None))
-            
-    def alt(self):
-        if not self.instance:
-            return ''
-        if not self.instance.is_folder():
-            return self.instance.extension
-        return _('folder')
 
 
 class StaticPathFinder:
@@ -95,10 +77,7 @@ class StaticPathFinder:
         for dir_name in dirs:
             for name in names:
                 path = os.path.join(dir_name, name + file_ext)
-                if not path in EXISTING_PATHS:
-                    # check on file system, then cache
-                    EXISTING_PATHS[path] = STATIC_STORAGE.exists(path)
-                if EXISTING_PATHS[path]:
+                if STATIC_STORAGE.exists(path):
                     return path
     
     

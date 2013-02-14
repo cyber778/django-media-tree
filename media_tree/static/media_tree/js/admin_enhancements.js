@@ -24,21 +24,6 @@ jQuery(function($) {
 
         return row;
     }
-
-    var makeForm = function(action, hiddenFields) {
-        if (!hiddenFields) {
-            hiddenFields = {};
-        }
-        hiddenFields['csrfmiddlewaretoken'] = $('input[name=csrfmiddlewaretoken]').val();
-        hiddenHtml = '';
-        for (key in hiddenFields) {
-            hiddenHtml += '<input type="hidden" name="' + key + '" value="' + hiddenFields[key] + '" />';
-        }
-        return $( 
-            '<form action="' + action + '" method="POST">'
-                +'<div style="display: none">' + hiddenHtml + '</div>'
-            +'</form>');
-    };
     
     $('#object-tool-add-folder').click(function(event) {
         event.preventDefault();
@@ -50,18 +35,16 @@ jQuery(function($) {
         var targetFolder = $('#changelist').data('targetFolder');
         
         cols[1] = $(
-            '<td></td>'
+            '<td><form action="add_folder/" method="POST">'
+                +'<span style="white-space: nowrap;"><input type="text" id="add-folder-name" name="name" value="'+gettext('New folder')+'"/>'
+                +'&nbsp;<input type="submit" class="button" value="'+gettext('Save')+'" /></span>'
+                +'<input type="hidden" name="parent" value="' + (targetFolder ? targetFolder.id : '') + '" />'
+                +'<input type="hidden" name="csrfmiddlewaretoken" />'
+                +(targetFolder ? '<input type="hidden" name="folder_id" value="' + targetFolder.id + '" />' : '')
+            +'</form></td>'
         );
-
-        var form = makeForm($('#object-tool-add-folder').attr('href'));
-        form.append(
-            '<span style="white-space: nowrap;"><input type="text" id="add-folder-name" name="name" value="'+gettext('New folder')+'"/>'
-            +'&nbsp;<input type="submit" class="button" value="'+gettext('Save')+'" /></span>'
-            +'<input type="hidden" name="parent" value="' + (targetFolder ? targetFolder.id : '') + '" />'
-            +(targetFolder ? '<input type="hidden" name="folder_id" value="' + targetFolder.id + '" />' : '')
-        );
-
-        cols[1].append(form);
+        
+        cols[1].find('input[name=csrfmiddlewaretoken]').val($('input[name=csrfmiddlewaretoken]').val())
         
         if (targetFolder && targetFolder.row) {
             // TODO: Copy padding, but add indent
@@ -107,7 +90,7 @@ jQuery(function($) {
 
     /**
     Adds child rows after a row (which are actually just indented rows sitting
-    underneath it), and keeps track of them for later removal.
+    underneath it), and adds keeps track of them for later removal.
     */
     $.fn.addExpandedChildren = function(rows, appendAfter) {
         if (appendAfter == null || appendAfter) {
@@ -131,13 +114,9 @@ jQuery(function($) {
         $(this).each(function() {
             var expandedChildren = $(this).data('expandedChildren');
             if (expandedChildren) {
-                $(this).data('expandedChildren', null);
                 $(expandedChildren).closeExpandedChildren();
                 $(expandedChildren).remove();
-
-                /*$(expandedChildren).fadeOut('fast', function() {
-                    $(this).remove();
-                });*/
+                $(this).data('expandedChildren', null);
             }
         }); 
     };
@@ -162,21 +141,9 @@ jQuery(function($) {
                 }
             }
         }
-    }
-
-    var dragHelper, draggedItem;
+    }    
     
-    $.fn.updateChangelist = function(html, restoreSelected) {
-        if (draggedItem) {
-            // TODO: This does not work. If the user is dragging while changelist is replaced,
-            // there will be JS errors.
-            $(draggedItem).draggable('destroy');
-        }
-        if (dragHelper) {
-            $(dragHelper).remove();
-            dragHelper = null;
-        }
-
+    $.fn.updateChangelist = function(html) {
         // Store checked rows
         var checked = $('input[name=_selected_action]:checked', this);
         // Update list
@@ -184,12 +151,10 @@ jQuery(function($) {
         $(this).trigger('init');
         // Restore checked rows
         var _this = this;
-        if (restoreSelected == null || restoreSelected) {
-            checked.each(function() {
-                var tr = $('input[value='+this.value+']', _this).closest('tr');
-                tr.selectChangelistRow();
-            });
-        }
+        checked.each(function() {
+            var tr = $('input[value='+this.value+']', _this).closest('tr');
+            tr.selectChangelistRow();
+        });
     }
 
     $('#changelist').bind('init', function(scope) {
@@ -213,44 +178,7 @@ jQuery(function($) {
         $(this).trigger('update', [$('tr', this), true]);
     });
 
-    $.fn.setUpdateReq = function(req) {
-        $(this).abortUpdateReq();
-        $(this).data('updateReq', req);
-    };
-
-    $.fn.abortUpdateReq = function(req) {
-        var req = $(this).data('updateReq');
-        if (req) {
-            req.abort();
-        }
-    };
-
-    $.addUserMessage = function(messageText, messageId, messageClass) {
-        if (!messageClass) {
-            messageClass = 'info';
-        }
-        var defaultMessageId = 'default-message';
-        if (!messageId) {
-            messageId = defaultMessageId;
-        }
-        $('#' + defaultMessageId).remove();
-        var message = $('<li id="'+messageId+'" class="' + messageClass + '">'+messageText+'</li>')
-        var currentMessage = $('#'+messageId);
-        if (currentMessage.length > 0) {
-            currentMessage.replaceWith(message);
-        } else {
-            var messageList = $('ul.messagelist');
-            if (messageList.length == 0) {
-                $('#content').before('<ul class="messagelist"></ul>');
-                var messageList = $('ul.messagelist');
-            }
-            messageList.append(message);
-        }
-    }
-
     $('#changelist').bind('update', function(e, updatedRows, isInitial) {
-        var _changelist = this;
-
         // Django calls actions() when document ready. Since the ChangeList  
         // was updated, actions() needs to be called again:
         django.jQuery("tr input.action-select").actions();
@@ -265,148 +193,6 @@ jQuery(function($) {
                 $(this).addClass('row2');
             } else {
                 $(this).addClass('row1');
-            }
-        });
-
-        // Set up drag & drop
-
-        var rowSelectInputName = '_selected_action';
-        var rowSelectInputSel = 'input[name=' + rowSelectInputName + ']';
-        var rowSel = '#changelist tbody tr';
-        var tableSel = '#changelist table';
-        var rootDroppable;
-        var dragDropScope = 'drag-filenode';
-
-        var initDroppable = function(target, loaderTarget) { 
-            return $(target).droppable({
-                drop: function(event, ui) {
-                    dragHelper = null;
-                    draggedItem = null;
-                    var targetId;
-
-                    if (this != rootDroppable) {
-                        // drop on folder
-                        targetId = $(rowSelectInputSel, target).val();
-                    } else {
-                        // drop on root
-                        targetId = '';
-                    }
-
-                    var action = $(ui.draggable).data('copyDrag') ? 'copy_selected' : 'move_selected';
-                    var fields = {
-                        action: action,
-                        target_node: targetId,
-                        execute: 1
-                    };
-
-                    var form = makeForm('', fields);
-                    var selected = $(rowSelectInputSel + ':checked', _changelist);
-                    form.append(selected.clone()); 
-                    
-                    //form.submit();
-                    
-                    //return;
-                    // instead:
-                    var _target = $(target);
-                    if (!loaderTarget) {
-                        loaderTarget = _target;
-                    }
-                    loaderTarget.addClass('loading');
-
-                    $(_changelist).setUpdateReq($.ajax({
-                        type: 'post',
-                        data: form.serialize(),  
-                        success: function(data) {
-                            loaderTarget.removeClass('loading');
-                            var newChangelist = $(data).find('#changelist');
-                            if (newChangelist.length) {
-                                // update table
-                                $(_changelist).updateChangelist(newChangelist.html(), false);
-                                // display messages
-                                $('.messagelist li', data).each(function() {
-                                    $.addUserMessage($(this).text(), null, this.className);
-                                });
-                            } else {
-                                // if the result is no changelist, the form did not validate.
-                                // display error messages:
-                                $('fieldset .errorlist li', data).each(function() {
-                                    $.addUserMessage($(this).text(), null, 'error');
-                                });
-                            }
-                        }, 
-                        error: function() {
-                            loaderTarget.removeClass('loading');
-                        }  
-                    }));
-                    
-                    return false;      
-                },
-                scope: dragDropScope,
-                hoverClass: 'drop-hover',
-                greedy: true,
-            });
-        };
-
-        // Init dropping on root.
-        // TODO: We can not use the table itself as droppable, since that would 
-        // accept a dragged row even when that row is dropped on itself (or actually
-        // the table, since jQuery prevents dropping on self and then propagates the
-        // event up the the table if the table is a droppable).
-        // Solution for now: The thead is the root droppable.
-        rootDroppable = initDroppable($('thead', _changelist), $(_changelist))[0];
-
-        $(rowSel).each(function() {
-            $(this).draggable({
-                stop: function(event, ui) {
-                    if ($(this).data('deselectAfterDrop')) {
-                        $(this).data('deselectAfterDrop', false);
-                        $(rowSelectInputSel, this).trigger('click');
-                    }
-                },
-                helper: function(event, ui) {
-                    // select dragged item
-                    if (!$(rowSelectInputSel, this).is(':checked')) {
-                        $(this).data('deselectAfterDrop', true);
-                        $(rowSelectInputSel, this).trigger('click');
-                    }
-                    var selected = $(rowSelectInputSel + ':checked', _changelist);
-                    var selectedCount = selected.length;
-
-                    var copyDrag = event.altKey;
-                    $(this).data('copyDrag', copyDrag);
-                    var helper = $(
-                        '<div class="drag-helper-wrapper"><div class="drag-helper collapsed' + (copyDrag ? ' copy' : '') + '">'
-                        + '<table><tr><td></td></tr></table>'
-                        + '</div></div>');
-                    var nodeLink = $(this).closest('tr').find('.node-link');
-                    $('td', helper).append(nodeLink.clone());
-
-                    
-                    if (selectedCount > 1) {
-                        var counter = '<span class="drag-counter">' + selectedCount
-                            + '</span>';
-                        $('td', helper).prepend(counter);
-                    }
-                    
-
-                    var handleOffset = nodeLink.position().left+'px';
-                    $(helper).css('padding-left', handleOffset);
-                    $(helper).css('padding-right', handleOffset);
-
-                    dragHelper = helper;
-                    draggedItem = this;
-
-                    return helper;
-                },
-                scope: dragDropScope,
-                opacity: .9,
-                handle: '.node-link',
-                appendTo: 'body',
-                delay: 200
-            }).disableSelection();
-
-            if ($('.node', this).is('.folder')) {
-                initDroppable(this);
             }
         });
 
@@ -492,16 +278,5 @@ jQuery(function($) {
         }
         return false;
     });
-
-    // Prebuffer background images
-    var bufferBackgroundElements = $('<div class="loading"><div class="folder-toggle" /></div>');
-    bufferBackgroundElements.hide();
-    $('body').append(bufferBackgroundElements);
-    $('*', bufferBackgroundElements).each(function() {
-        var matchUrl = $(this).css('background-image').match(/url\((.*)\)/);
-        var img = new Image();
-        img.src = matchUrl[1];
-    });
-    bufferBackgroundElements.remove();
 
 });

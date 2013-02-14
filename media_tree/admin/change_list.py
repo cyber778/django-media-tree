@@ -1,4 +1,3 @@
-import django
 from media_tree.models import FileNode
 from media_tree.admin.utils import get_current_request, is_search_request,  \
     get_request_attr
@@ -26,7 +25,7 @@ class MediaTreeChangeList(MPTTChangeList):
     def get_query_set(self, request=None):
 
         # request arg was added in django r16144 (after 1.3)
-        if request is not None and django.VERSION >= (1, 4):
+        if request is not None:# and django.VERSION >= (1, 4):
             qs = super(MPTTChangeList, self).get_query_set(request)
         else:
             qs = super(MPTTChangeList, self).get_query_set()

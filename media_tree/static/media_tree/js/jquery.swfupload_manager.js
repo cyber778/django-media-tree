@@ -47,20 +47,14 @@ jQuery(function($) {
 
             ,fileQueued: function(file) 
             {
-                sizeFormatted = file.size > 1000000 ? 
-                    Math.round(file.size / 1000000, 1) + ' MB'
-                    : (file.size > 1000 ? 
-                        Math.round(file.size / 1000, 1) + ' KB'
-                        : file.size + ' bytes'); 
-                
                 cols = [];
                 cols[1] = $('<td class="nowrap"><span style="display: none;" class="upload-progress-bar-container">'
                     + '<span class="upload-progress-bar"></span></span><span class="queue-status">' 
                     + gettext('queued') + '</span>' 
                     + '&nbsp;<a href="javascript:void(0)">'+file.name+'</a></td>');
-                cols[2] = $('<td class="filesize">' + sizeFormatted + '</td>');
+                cols[2] = $('<td class="filesize">'+Math.round(file.size / 1024, 1) + ' KiB'+'</td>');
 
-                var row = $.makeChangelistRow(cols, manager.getQueueItem(file, 'queue'));
+                var row = $.makeChangelistRow(cols, manager.getQueueItem(file, 'row1'));
                 var firstRow = $('.changelist-first-row');
                 if (firstRow.length > 0) {
                     firstRow.before (row);
@@ -207,7 +201,18 @@ jQuery(function($) {
 
             ,addUserMessage: function(messageText, messageId) 
             {
-                $.addUserMessage(messageText, messageId);
+                var message = $('<li id="'+messageId+'">'+messageText+'</li>')
+                var currentMessage = $('#'+messageId);
+                if (currentMessage.length > 0) {
+                    currentMessage.replaceWith(message);
+                } else {
+                    var messageList = $('ul.messagelist');
+                    if (messageList.length == 0) {
+                        $('#content').before('<ul class="messagelist"></ul>');
+                        var messageList = $('ul.messagelist');
+                    }
+                    messageList.append(message);
+                }
             }
 
             ,queueComplete: function(numFilesUploaded) {
@@ -220,27 +225,20 @@ jQuery(function($) {
                     var message = gettext('loading...');
                     manager.addUserMessage(message, 'swfupload-queue-message');
 
-                    $('#changelist').addClass('loading');
-                    $('#changelist').setUpdateReq($.ajax({
-                        url: window.location.href, 
-                        success: function(data, textStatus) {
-                            stats = _this.getStats();
-                            if (stats.files_queued == 0) {
-                                // reload changelist contents
-                                $('#changelist').updateChangelist($(data).find('#changelist').html());
-                                manager.markFirstChangelistRow();
-                                // insert success message
-                                message = ngettext('Successfully added %i file.', 'Successfully added %i files.', stats.successful_uploads).replace('%i', stats.successful_uploads);
-                                manager.addUserMessage(message, 'swfupload-queue-message');
-                                // reset stats
-                                stats.successful_uploads = 0;
-                                _this.setStats(stats);
-                            }
-                        },
-                        complete: function(jqXHR, textStatus) {
-                            $('#changelist').removeClass('loading');
+                    $.get(window.location.href, null, function(data, textStatus) {
+                        stats = _this.getStats();
+                        if (stats.files_queued == 0) {
+                            // reload changelist contents
+                            $('#changelist').updateChangelist($(data).find('#changelist').html());
+                            manager.markFirstChangelistRow();
+                            // insert success message
+                            message = ngettext('Successfully added %i file.', 'Successfully added %i files.', stats.successful_uploads).replace('%i', stats.successful_uploads);
+                            manager.addUserMessage(message, 'swfupload-queue-message');
+                            // reset stats
+                            stats.successful_uploads = 0;
+                            _this.setStats(stats);
                         }
-                    }));
+                    });
                 } else {
                     var message = gettext('There were errors during upload.');
                     manager.addUserMessage(message, 'swfupload-queue-message');
